@@ -1,15 +1,72 @@
 # esp32s3-nat-router
+
 ESP32S3 WiFi NAT Router with client listing, serial deauth, and network monitoring
 
-# My Goal:
-1. To make a NAT Router for ESP32-S3 DevKitC-1
-2. Deauth users via serial monitor
-3. Forward traffic from Upstream network
-4. List all connected devices
-5. Customizable STA List (if you have multiple network to choose from and if the esp32s3 either gets kicked, disconnected, blacklisted, or the network is unavailable, it would connect to a different netowrk from your list)
-6. Customizeable AP SSID and password
-7. Customize all via Serial Monitor
-8. And lastly, make this whole project entirely only in GitHub and not using ESP-IDF, esptool, PlatformIO, Arduino IDE, and other tools except for GitHub
+---
 
+## Project Overview
 
-Everything will be made by a single STE Student from GEANHS from Philippines
+A simple NAT router implementation for the ESP32-S3 DevKitC-1. This project aims to provide WiFi NAT routing capabilities with features such as device listing, serial deauthentication, and easy configuration—all managed directly on GitHub.
+
+---
+
+## Features & Roadmap
+
+- [ ] NAT Router for ESP32-S3 DevKitC-1
+- [ ] Deauthenticate users via serial monitor
+- [ ] Forward traffic from upstream network
+- [ ] List all connected devices
+- [ ] Customizable STA List (automatically switch if disconnected/blacklisted)
+- [ ] Customizable AP SSID and password
+- [ ] Configure all settings via Serial Monitor
+- [ ] Fully develop the project on GitHub (no use of ESP-IDF, esptool, PlatformIO, Arduino IDE, etc.)
+
+---
+
+## Getting Started
+
+### Prerequisites
+
+- ESP32-S3 DevKitC-1 board
+- [Optional] USB-to-serial adapter
+- WiFi network(s) for testing
+
+### Build & Flash
+
+> ⚠️ This project is designed to be built and managed entirely through GitHub workflows.  
+> When available, instructions and automation steps will be added here.
+
+---
+
+## Usage
+
+1. Connect your ESP32-S3 DevKitC-1 to power and serial.
+2. Monitor the serial output at 115200 baud.
+3. Use the serial monitor to configure SSID, password, and other settings.
+
+---
+
+## Contributing
+
+Pull requests and suggestions are welcome!  
+If you have ideas or find bugs, please open an issue.
+
+---
+
+## License
+
+This project is free to use for any purpose.  
+However, you must give credit to the original author (Prinsx-py) in any derivative works or distributions.  
+See the [LICENSE](LICENSE) file for details.
+
+---
+
+## Credits
+
+Made by a single STE Student from GEANHS, Philippines.
+
+---
+
+## Acknowledgements
+
+Thanks to the ESP32 and open source communities for inspiration and resources.
