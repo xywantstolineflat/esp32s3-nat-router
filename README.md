@@ -12,8 +12,8 @@ A simple NAT router implementation for the ESP32-S3 DevKitC-1. This project aims
 
 ## Features & Roadmap
 
-- [ ] NAT Router for ESP32-S3 DevKitC-1
-- [ ] Deauthenticate users via serial monitor
+- [x] NAT Router for ESP32-S3 DevKitC-1
+- [x] Deauthenticate users via serial monitor
 - [ ] Forward traffic from upstream network
 - [x] List all connected devices
 - [ ] Customizable STA List (automatically switch if disconnected/blacklisted)
