@@ -11,19 +11,13 @@
 #include "esp_http_server.h"
 #include "cJSON.h"
 #include "esp_spiffs.h"
-#include <string.h>
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
-#include "esp_wifi.h"
-#include "esp_event.h"
-#include "nvs_flash.h"
-#include "esp_log.h"
-#include "esp_system.h"
-#include "esp_netif.h"
-#include "esp_http_server.h"
-#include "cJSON.h"
 
 #define AP_SSID      "ESP32-NAT"
+#define AP_PASS      "esp32pass"
+#define AP_CHANNEL   1
+#define MAX_STA_CONN 8
+
+static const char *TAG = "esp32nat";
 
 // --- Add CORS headers for API endpoints (optional, for fetch from browser) ---
 esp_err_t add_cors_headers(httpd_req_t *req) {
@@ -61,11 +55,66 @@ esp_err_t api_clients_handler(httpd_req_t *req) {
     free(json);
     return ESP_OK;
 }
-#define AP_PASS      "esp32pass"
-#define AP_CHANNEL   1
-#define MAX_STA_CONN 8
 
-static const char *TAG = "esp32nat";
+// --- /api/kick: Deauth client by MAC ---
+esp_err_t api_kick_handler(httpd_req_t *req) {
+    add_cors_headers(req);
+    char buf[128];
+    int ret = httpd_req_recv(req, buf, sizeof(buf)-1);
+    if (ret <= 0) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+    buf[ret] = 0;
+    cJSON *root = cJSON_Parse(buf);
+    if (!root) {
+        httpd_resp_send_400(req);
+        return ESP_FAIL;
+    }
+    const char *mac = cJSON_GetObjectItem(root, "mac")->valuestring;
+    uint8_t mac_bin[6];
+    sscanf(mac, "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
+        &mac_bin[0], &mac_bin[1], &mac_bin[2], &mac_bin[3], &mac_bin[4], &mac_bin[5]);
+    esp_wifi_deauth_sta(mac_bin);
+    ESP_LOGI(TAG, "Deauthed %s", mac);
+    cJSON_Delete(root);
+    httpd_resp_sendstr(req, "{\"ok\":true}");
+    return ESP_OK;
+}
+
+// --- Serve index.html from SPIFFS ---
+esp_err_t index_get_handler(httpd_req_t *req) {
+    FILE *f = fopen("/spiffs/index.html", "r");
+    if (!f) {
+        httpd_resp_send_404(req);
+        return ESP_FAIL;
+    }
+    char line[256];
+    httpd_resp_set_type(req, "text/html");
+    while (fgets(line, sizeof(line), f)) {
+        httpd_resp_sendstr_chunk(req, line);
+    }
+    fclose(f);
+    httpd_resp_sendstr_chunk(req, NULL);
+    return ESP_OK;
+}
+
+// --- Serve style.css from SPIFFS ---
+esp_err_t css_get_handler(httpd_req_t *req) {
+    FILE *f = fopen("/spiffs/style.css", "r");
+    if (!f) {
+        httpd_resp_send_404(req);
+        return ESP_FAIL;
+    }
+    char line[256];
+    httpd_resp_set_type(req, "text/css");
+    while (fgets(line, sizeof(line), f)) {
+        httpd_resp_sendstr_chunk(req, line);
+    }
+    fclose(f);
+    httpd_resp_sendstr_chunk(req, NULL);
+    return ESP_OK;
+}
 
 // --- WiFi Event Handler ---
 static void wifi_event_handler(void* arg, esp_event_base_t event_base,
@@ -130,92 +179,6 @@ void nat_enable(void) {
     esp_netif_t* ap_netif = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
     esp_netif_nat_enable(ap_netif);
     ESP_LOGI(TAG, "NAT enabled");
-}
-
-// --- Serve index.html from SPIFFS ---
-esp_err_t index_get_handler(httpd_req_t *req) {
-    FILE *f = fopen("/spiffs/index.html", "r");
-    if (!f) {
-        httpd_resp_send_404(req);
-        return ESP_FAIL;
-    }
-    char line[256];
-    httpd_resp_set_type(req, "text/html");
-    while (fgets(line, sizeof(line), f)) {
-        httpd_resp_sendstr_chunk(req, line);
-    }
-    fclose(f);
-    httpd_resp_sendstr_chunk(req, NULL);
-    return ESP_OK;
-}
-
-// --- Serve style.css from SPIFFS ---
-esp_err_t css_get_handler(httpd_req_t *req) {
-    FILE *f = fopen("/spiffs/style.css", "r");
-    if (!f) {
-        httpd_resp_send_404(req);
-        return ESP_FAIL;
-    }
-    char line[256];
-    httpd_resp_set_type(req, "text/css");
-    while (fgets(line, sizeof(line), f)) {
-        httpd_resp_sendstr_chunk(req, line);
-    }
-    fclose(f);
-    httpd_resp_sendstr_chunk(req, NULL);
-    return ESP_OK;
-}
-
-// --- /api/clients: List connected clients ---
-esp_err_t api_clients_handler(httpd_req_t *req) {
-    wifi_sta_list_t sta_list;
-    tcpip_adapter_sta_list_t ip_list;
-    esp_wifi_ap_get_sta_list(&sta_list);
-    tcpip_adapter_get_sta_list(&sta_list, &ip_list);
-
-    cJSON *root = cJSON_CreateArray();
-    for (int i = 0; i < ip_list.num; ++i) {
-        cJSON *cli = cJSON_CreateObject();
-        char ip[16], mac[18];
-        sprintf(ip, IPSTR, IP2STR(&ip_list.sta[i].ip));
-        sprintf(mac, "%02X:%02X:%02X:%02X:%02X:%02X",
-            ip_list.sta[i].mac[0], ip_list.sta[i].mac[1], ip_list.sta[i].mac[2],
-            ip_list.sta[i].mac[3], ip_list.sta[i].mac[4], ip_list.sta[i].mac[5]);
-        cJSON_AddStringToObject(cli, "ip", ip);
-        cJSON_AddStringToObject(cli, "mac", mac);
-        cJSON_AddItemToArray(root, cli);
-    }
-    char *json = cJSON_PrintUnformatted(root);
-    httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, json, strlen(json));
-    cJSON_Delete(root);
-    free(json);
-    return ESP_OK;
-}
-
-// --- /api/kick: Deauth client by MAC ---
-esp_err_t api_kick_handler(httpd_req_t *req) {
-    char buf[128];
-    int ret = httpd_req_recv(req, buf, sizeof(buf)-1);
-    if (ret <= 0) {
-        httpd_resp_send_500(req);
-        return ESP_FAIL;
-    }
-    buf[ret] = 0;
-    cJSON *root = cJSON_Parse(buf);
-    if (!root) {
-        httpd_resp_send_400(req);
-        return ESP_FAIL;
-    }
-    const char *mac = cJSON_GetObjectItem(root, "mac")->valuestring;
-    uint8_t mac_bin[6];
-    sscanf(mac, "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
-        &mac_bin[0], &mac_bin[1], &mac_bin[2], &mac_bin[3], &mac_bin[4], &mac_bin[5]);
-    esp_wifi_deauth_sta(mac_bin);
-    ESP_LOGI(TAG, "Deauthed %s", mac);
-    cJSON_Delete(root);
-    httpd_resp_sendstr(req, "{\"ok\":true}");
-    return ESP_OK;
 }
 
 // --- HTTP Server Setup ---
@@ -287,7 +250,6 @@ void serial_task(void *arg) {
 }
 
 // --- SPIFFS Init ---
-#include "esp_spiffs.h"
 void spiffs_init(void) {
     esp_vfs_spiffs_conf_t conf = {
       .base_path = "/spiffs",
