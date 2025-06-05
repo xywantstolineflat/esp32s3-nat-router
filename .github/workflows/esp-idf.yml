@@ -1,0 +1,17 @@
+name: ESP32S3 Build
+
+on: [push, pull_request]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.0
+          target: esp32s3
+      - uses: actions/upload-artifact@v4
+        with:
+          name: firmware
+          path: build/*.bin
