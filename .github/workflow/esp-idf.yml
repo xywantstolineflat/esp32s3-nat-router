@@ -1,4 +1,4 @@
-name: ESP-IDF Build
+name: ESP32S3 Build
 
 on: [push, pull_request]
 
@@ -11,3 +11,7 @@ jobs:
         with:
           esp_idf_version: v5.0
           target: esp32s3
+      - uses: actions/upload-artifact@v4
+        with:
+          name: firmware
+          path: build/*.bin
