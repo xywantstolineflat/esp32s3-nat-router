@@ -6,33 +6,24 @@
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <div style="display: flex; justify-content: space-between; align-items: center;">
-    <h1>ESP32S3 NAT Configuration Menu</h1>
-    <button id="theme-toggle">🌙 Dark Mode</button>
-  </div>
-  <h2>Welcome and configure your ESP32-S3 NAT Router</h2>
-
-  <div id="lock-ui" style="margin-bottom: 1em;">
-    <label>
-      <input type="checkbox" id="lock-toggle" checked>
-      Lock WiFi Config UI
-    </label>
-    <button id="set-lock-pass">Set/Change Lock Password</button>
-  </div>
-
-  <div id="lock-screen" style="display:none;">
-    <input type="password" id="unlock-pass" placeholder="Enter unlock password">
-    <button id="unlock-btn">Unlock</button>
-    <span id="unlock-msg" style="color:red;"></span>
-  </div>
-
+  <h1>ESP32S3 NAT Configuration Menu</h1>
   <div id="wifi-config">
     <label for="wssid">Wi-Fi SSID:</label>
-    <input type="text" id="wssid" name="wssid" maxlength="32" required pattern="^[ -~]+$" placeholder="Enter Wi-Fi SSID">
+    <input type="text" id="wssid" name="wssid" maxlength="32" required>
     <label for="wpass">Password:</label>
-    <input type="text" id="wpass" name="wpass" maxlength="64" required pattern="^[ -~]+$" placeholder="Enter network password">
+    <input type="text" id="wpass" name="wpass" maxlength="64">
+    <button onclick="saveAPConfig()">Save AP Config</button>
   </div>
-
+  <div id="sta-config">
+    <h3>STA Profiles</h3>
+    <table id="sta-table" border="1">
+        <thead><tr><th>SSID</th><th>Blacklisted</th><th>Actions</th></tr></thead>
+        <tbody></tbody>
+    </table>
+    <input type="text" id="new_ssid" placeholder="SSID" maxlength="32">
+    <input type="text" id="new_pass" placeholder="Password" maxlength="64">
+    <button onclick="addSTA()">Add STA</button>
+  </div>
   <h3>Connected Clients</h3>
   <table id="clients-table" border="1" style="width:100%;max-width:600px;">
     <thead>
@@ -40,97 +31,73 @@
     </thead>
     <tbody></tbody>
   </table>
-
   <script>
-    // --- Dark/Light Mode ---
-    const themeToggle = document.getElementById('theme-toggle');
-    themeToggle.onclick = () => {
-      document.body.classList.toggle('dark');
-      themeToggle.textContent = document.body.classList.contains('dark') ? '☀️ Light Mode' : '🌙 Dark Mode';
-      localStorage.setItem('theme', document.body.classList.contains('dark') ? 'dark' : 'light');
-    };
-    if (localStorage.getItem('theme') === 'dark') {
-      document.body.classList.add('dark');
-      themeToggle.textContent = '☀️ Light Mode';
+    async function loadAPConfig() {
+      const res = await fetch('/api/ap-config');
+      const conf = await res.json();
+      document.getElementById('wssid').value = conf.ssid;
+      document.getElementById('wpass').value = conf.password;
     }
-
-    // --- WiFi Config UI Lock ---
-    const lockToggle = document.getElementById('lock-toggle');
-    const lockScreen = document.getElementById('lock-screen');
-    const wifiConfig = document.getElementById('wifi-config');
-    const unlockBtn = document.getElementById('unlock-btn');
-    const unlockPass = document.getElementById('unlock-pass');
-    const unlockMsg = document.getElementById('unlock-msg');
-    const setLockPassBtn = document.getElementById('set-lock-pass');
-
-    // Simple XOR "encryption" for demo (not secure)
-    function xorEncrypt(str, key) {
-      return btoa([...str].map((c,i)=>String.fromCharCode(c.charCodeAt(0)^key.charCodeAt(i%key.length))).join(''));
+    async function saveAPConfig() {
+      const ssid = document.getElementById('wssid').value;
+      const password = document.getElementById('wpass').value;
+      await fetch('/api/ap-config', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ssid, password})
+      });
+      alert('Saved! Please reboot device.');
     }
-    function xorDecrypt(enc, key) {
-      try {
-        return atob(enc).split('').map((c,i)=>String.fromCharCode(c.charCodeAt(0)^key.charCodeAt(i%key.length))).join('');
-      } catch { return ''; }
+    async function fetchSTA() {
+      const res = await fetch('/api/sta-list');
+      const list = await res.json();
+      const tbody = document.querySelector('#sta-table tbody');
+      tbody.innerHTML = '';
+      list.forEach(sta => {
+        tbody.innerHTML += `<tr>
+          <td>${sta.ssid}</td>
+          <td>${sta.blacklisted ? 'Yes' : 'No'}</td>
+          <td>
+            <button onclick="delSTA('${sta.ssid}')">Delete</button>
+            <button onclick="blkSTA('${sta.ssid}')">Blacklist</button>
+          </td>
+        </tr>`;
+      });
     }
-
-    function showLockScreen(show) {
-      lockScreen.style.display = show ? '' : 'none';
-      wifiConfig.style.display = show ? 'none' : '';
+    async function addSTA() {
+      const ssid = document.getElementById('new_ssid').value;
+      const password = document.getElementById('new_pass').value;
+      await fetch('/api/sta-list', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({action:'add', ssid, password})
+      });
+      document.getElementById('new_ssid').value = '';
+      document.getElementById('new_pass').value = '';
+      fetchSTA();
     }
-
-    function checkLock() {
-      if (lockToggle.checked && localStorage.getItem('lockPass')) {
-        showLockScreen(true);
-      } else {
-        showLockScreen(false);
-      }
+    async function delSTA(ssid) {
+      await fetch('/api/sta-list', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({action:'del', ssid})
+      });
+      fetchSTA();
     }
-
-    lockToggle.onchange = () => {
-      localStorage.setItem('lockEnabled', lockToggle.checked ? '1' : '');
-      checkLock();
-    };
-
-    setLockPassBtn.onclick = () => {
-      const pass = prompt('Set new lock password:');
-      if (pass && pass.length > 0) {
-        const confirmPass = prompt('Confirm password:');
-        if (pass === confirmPass) {
-          // Store encrypted dummy string with password as key
-          localStorage.setItem('lockPass', xorEncrypt('esp32lock', pass));
-          alert('Lock password set!');
-          checkLock();
-        } else {
-          alert('Passwords do not match.');
-        }
-      }
-    };
-
-    unlockBtn.onclick = () => {
-      const pass = unlockPass.value;
-      if (xorDecrypt(localStorage.getItem('lockPass'), pass) === 'esp32lock') {
-        showLockScreen(false);
-        unlockMsg.textContent = '';
-        unlockPass.value = '';
-      } else {
-        unlockMsg.textContent = 'Incorrect password!';
-      }
-    };
-
-    // On load, restore lock state
-    if (localStorage.getItem('lockEnabled') === '1') lockToggle.checked = true;
-    else lockToggle.checked = false;
-    checkLock();
-
-    // --- Fetch and display clients ---
+    async function blkSTA(ssid) {
+      await fetch('/api/sta-list', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({action:'blacklist', ssid})
+      });
+      fetchSTA();
+    }
     async function fetchClients() {
       let clients = [];
       try {
-      const res = await fetch('/api/clients');
-      clients = await res.json();
-      } catch {
-      clients = [];
-      }
+        const res = await fetch('/api/clients');
+        clients = await res.json();
+      } catch { clients = []; }
       const tbody = document.querySelector('#clients-table tbody');
       tbody.innerHTML = '';
       clients.forEach(client => {
@@ -140,7 +107,6 @@
         tbody.appendChild(tr);
       });
     }
-
     window.kickUser = async function(mac) {
       if (!confirm(`Kick user with MAC ${mac}?`)) return;
       try {
@@ -154,9 +120,8 @@
         alert('Failed to kick user.');
       }
     };
-
-    fetchClients();
-    setInterval(fetchClients, 5000); // Refresh every 5s
+    window.onload = () => { loadAPConfig(); fetchSTA(); fetchClients(); };
+    setInterval(fetchClients, 5000);
   </script>
 </body>
 </html>
