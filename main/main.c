@@ -11,15 +11,15 @@
 #include "esp_http_server.h"
 #include "cJSON.h"
 #include "esp_spiffs.h"
+#include "ap_config.h"
+#include "sta_config.h"
 
-#define AP_SSID      "ESP32-NAT"
-#define AP_PASS      "esp32pass"
 #define AP_CHANNEL   1
 #define MAX_STA_CONN 8
 
 static const char *TAG = "esp32nat";
 
-// --- Add CORS headers for API endpoints (optional, for fetch from browser) ---
+// --- CORS ---
 esp_err_t add_cors_headers(httpd_req_t *req) {
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
     httpd_resp_set_hdr(req, "Access-Control-Allow-Methods", "GET, POST, OPTIONS");
@@ -27,15 +27,13 @@ esp_err_t add_cors_headers(httpd_req_t *req) {
     return ESP_OK;
 }
 
-// --- /api/clients: List connected clients (with CORS) ---
+// --- /api/clients ---
 esp_err_t api_clients_handler(httpd_req_t *req) {
     add_cors_headers(req);
-
     wifi_sta_list_t sta_list;
     tcpip_adapter_sta_list_t ip_list;
     esp_wifi_ap_get_sta_list(&sta_list);
     tcpip_adapter_get_sta_list(&sta_list, &ip_list);
-
     cJSON *root = cJSON_CreateArray();
     for (int i = 0; i < ip_list.num; ++i) {
         cJSON *cli = cJSON_CreateObject();
@@ -56,7 +54,7 @@ esp_err_t api_clients_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
-// --- /api/kick: Deauth client by MAC ---
+// --- /api/kick ---
 esp_err_t api_kick_handler(httpd_req_t *req) {
     add_cors_headers(req);
     char buf[128];
@@ -82,6 +80,75 @@ esp_err_t api_kick_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
+// --- /api/ap-config ---
+esp_err_t ap_config_get_handler(httpd_req_t *req) {
+    add_cors_headers(req);
+    char ssid[33], pass[65];
+    ap_config_load(ssid, sizeof(ssid), pass, sizeof(pass));
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddStringToObject(root, "ssid", ssid);
+    cJSON_AddStringToObject(root, "password", pass);
+    char *json = cJSON_PrintUnformatted(root);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, json, HTTPD_RESP_USE_STRLEN);
+    cJSON_Delete(root); free(json);
+    return ESP_OK;
+}
+esp_err_t ap_config_post_handler(httpd_req_t *req) {
+    add_cors_headers(req);
+    char buf[128]={0};
+    httpd_req_recv(req, buf, sizeof(buf));
+    cJSON *root = cJSON_Parse(buf);
+    if (!root) return httpd_resp_send_400(req);
+    const char *ssid = cJSON_GetObjectItem(root, "ssid")->valuestring;
+    const char *password = cJSON_GetObjectItem(root, "password")->valuestring;
+    ap_config_save(ssid, password);
+    cJSON_Delete(root);
+    httpd_resp_sendstr(req, "{\"ok\":true}");
+    return ESP_OK;
+}
+
+// --- /api/sta-list ---
+esp_err_t sta_list_get_handler(httpd_req_t *req) {
+    add_cors_headers(req);
+    sta_entry_t list[MAX_STA_LIST];
+    size_t n = sta_list_load(list, MAX_STA_LIST);
+    cJSON *arr = cJSON_CreateArray();
+    for (size_t i=0; i<n; ++i) {
+        cJSON *obj = cJSON_CreateObject();
+        cJSON_AddStringToObject(obj, "ssid", list[i].ssid);
+        cJSON_AddBoolToObject(obj, "blacklisted", list[i].blacklisted);
+        cJSON_AddItemToArray(arr, obj);
+    }
+    char *json = cJSON_PrintUnformatted(arr);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, json, HTTPD_RESP_USE_STRLEN);
+    cJSON_Delete(arr); free(json);
+    return ESP_OK;
+}
+
+// --- /api/sta-list (POST) ---
+esp_err_t sta_list_post_handler(httpd_req_t *req) {
+    add_cors_headers(req);
+    char buf[128]={0};
+    httpd_req_recv(req, buf, sizeof(buf));
+    cJSON *root = cJSON_Parse(buf);
+    if (!root) return httpd_resp_send_400(req);
+    const char *action = cJSON_GetObjectItem(root, "action")->valuestring;
+    const char *ssid = cJSON_GetObjectItem(root, "ssid")->valuestring;
+    if (strcmp(action,"add")==0) {
+        const char *pass = cJSON_GetObjectItem(root, "password")->valuestring;
+        sta_add(ssid, pass);
+    } else if (strcmp(action,"del")==0) {
+        sta_del(ssid);
+    } else if (strcmp(action,"blacklist")==0) {
+        sta_blacklist(ssid);
+    }
+    cJSON_Delete(root);
+    httpd_resp_sendstr(req, "{\"ok\":true}");
+    return ESP_OK;
+}
+
 // --- Serve index.html from SPIFFS ---
 esp_err_t index_get_handler(httpd_req_t *req) {
     FILE *f = fopen("/spiffs/index.html", "r");
@@ -99,21 +166,15 @@ esp_err_t index_get_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
-// --- Serve style.css from SPIFFS ---
-esp_err_t css_get_handler(httpd_req_t *req) {
-    FILE *f = fopen("/spiffs/style.css", "r");
-    if (!f) {
-        httpd_resp_send_404(req);
-        return ESP_FAIL;
-    }
-    char line[256];
-    httpd_resp_set_type(req, "text/css");
-    while (fgets(line, sizeof(line), f)) {
-        httpd_resp_sendstr_chunk(req, line);
-    }
-    fclose(f);
-    httpd_resp_sendstr_chunk(req, NULL);
-    return ESP_OK;
+// --- SPIFFS Init ---
+void spiffs_init(void) {
+    esp_vfs_spiffs_conf_t conf = {
+      .base_path = "/spiffs",
+      .partition_label = NULL,
+      .max_files = 5,
+      .format_if_mount_failed = true
+    };
+    esp_vfs_spiffs_register(&conf);
 }
 
 // --- WiFi Event Handler ---
@@ -125,6 +186,9 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_AP_STADISCONNECTED) {
         wifi_event_ap_stadisconnected_t* event = (wifi_event_ap_stadisconnected_t*) event_data;
         ESP_LOGI(TAG, "Client disconnected: "MACSTR, MAC2STR(event->mac));
+    } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
+        ESP_LOGI(TAG, "STA disconnected, auto-switching...");
+        sta_auto_switch();
     }
 }
 
@@ -145,37 +209,42 @@ void wifi_init_softap(void) {
                                         NULL,
                                         &instance_any_id);
 
+    char ap_ssid[33], ap_pass[65];
+    ap_config_load(ap_ssid, sizeof(ap_ssid), ap_pass, sizeof(ap_pass));
     wifi_config_t wifi_ap_config = {
         .ap = {
-            .ssid = AP_SSID,
-            .ssid_len = strlen(AP_SSID),
+            .ssid = "",
+            .ssid_len = 0,
             .channel = AP_CHANNEL,
-            .password = AP_PASS,
+            .password = "",
             .max_connection = MAX_STA_CONN,
             .authmode = WIFI_AUTH_WPA_WPA2_PSK
         },
     };
-    if (strlen(AP_PASS) == 0) {
+    strncpy((char*)wifi_ap_config.ap.ssid, ap_ssid, sizeof(wifi_ap_config.ap.ssid));
+    strncpy((char*)wifi_ap_config.ap.password, ap_pass, sizeof(wifi_ap_config.ap.password));
+    wifi_ap_config.ap.ssid_len = strlen(ap_ssid);
+    if (strlen(ap_pass) == 0) {
         wifi_ap_config.ap.authmode = WIFI_AUTH_OPEN;
     }
 
-    wifi_config_t wifi_sta_config = {
-        .sta = {
-            .ssid = "",
-            .password = ""
-        }
-    };
+    wifi_config_t wifi_sta_config = {0};
+    sta_entry_t list[MAX_STA_LIST];
+    size_t n = sta_list_load(list, MAX_STA_LIST);
+    if (n > 0) {
+        strncpy((char*)wifi_sta_config.sta.ssid, list[0].ssid, sizeof(wifi_sta_config.sta.ssid));
+        strncpy((char*)wifi_sta_config.sta.password, list[0].pass, sizeof(wifi_sta_config.sta.password));
+    }
 
     esp_wifi_set_mode(WIFI_MODE_APSTA);
     esp_wifi_set_config(WIFI_IF_AP, &wifi_ap_config);
     esp_wifi_set_config(WIFI_IF_STA, &wifi_sta_config);
     esp_wifi_start();
-    ESP_LOGI(TAG, "WiFi AP+STA started. AP SSID:%s PASS:%s", AP_SSID, AP_PASS);
+    ESP_LOGI(TAG, "WiFi AP+STA started. AP SSID:%s PASS:%s", ap_ssid, ap_pass);
 }
 
 // --- NAT Setup (IDF v4.1+ has built-in) ---
 void nat_enable(void) {
-    // For ESP-IDF v4.1+ only
     esp_netif_t* ap_netif = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
     esp_netif_nat_enable(ap_netif);
     ESP_LOGI(TAG, "NAT enabled");
@@ -195,14 +264,6 @@ void start_webserver(void) {
     };
     httpd_register_uri_handler(server, &index_uri);
 
-    httpd_uri_t css_uri = {
-        .uri = "/style.css",
-        .method = HTTP_GET,
-        .handler = css_get_handler,
-        .user_ctx = NULL
-    };
-    httpd_register_uri_handler(server, &css_uri);
-
     httpd_uri_t api_clients_uri = {
         .uri = "/api/clients",
         .method = HTTP_GET,
@@ -218,11 +279,43 @@ void start_webserver(void) {
         .user_ctx = NULL
     };
     httpd_register_uri_handler(server, &api_kick_uri);
+
+    httpd_uri_t ap_cfg_get = {
+        .uri = "/api/ap-config",
+        .method = HTTP_GET,
+        .handler = ap_config_get_handler,
+        .user_ctx = NULL
+    };
+    httpd_register_uri_handler(server, &ap_cfg_get);
+
+    httpd_uri_t ap_cfg_post = {
+        .uri = "/api/ap-config",
+        .method = HTTP_POST,
+        .handler = ap_config_post_handler,
+        .user_ctx = NULL
+    };
+    httpd_register_uri_handler(server, &ap_cfg_post);
+
+    httpd_uri_t sta_list_get = {
+        .uri = "/api/sta-list",
+        .method = HTTP_GET,
+        .handler = sta_list_get_handler,
+        .user_ctx = NULL
+    };
+    httpd_register_uri_handler(server, &sta_list_get);
+
+    httpd_uri_t sta_list_post = {
+        .uri = "/api/sta-list",
+        .method = HTTP_POST,
+        .handler = sta_list_post_handler,
+        .user_ctx = NULL
+    };
+    httpd_register_uri_handler(server, &sta_list_post);
 }
 
 // --- Serial Task for CLI ---
 void serial_task(void *arg) {
-    char line[64];
+    char line[128];
     while (1) {
         fgets(line, sizeof(line), stdin);
         if (strncmp(line, "list", 4) == 0) {
@@ -244,20 +337,40 @@ void serial_task(void *arg) {
             esp_wifi_deauth_sta(mac);
             printf("Kicked %02X:%02X:%02X:%02X:%02X:%02X\n",
                 mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+        } else if (strncmp(line, "setap ", 6) == 0) {
+            char ssid[33], pass[65];
+            if (sscanf(line+6, "%32s %64s", ssid, pass) == 2) {
+                ap_config_save(ssid, pass);
+                printf("AP config saved! Reboot to apply.\n");
+            } else {
+                printf("Usage: setap <ssid> <password>\n");
+            }
+        } else if (strncmp(line, "addsta ", 7) == 0) {
+            char ssid[33], pass[65];
+            if (sscanf(line+7, "%32s %64s", ssid, pass) == 2) {
+                sta_add(ssid, pass);
+                printf("STA profile added.\n");
+            } else {
+                printf("Usage: addsta <ssid> <password>\n");
+            }
+        } else if (strncmp(line, "delsta ", 7) == 0) {
+            char ssid[33];
+            if (sscanf(line+7, "%32s", ssid) == 1) {
+                sta_del(ssid);
+                printf("STA profile deleted.\n");
+            } else {
+                printf("Usage: delsta <ssid>\n");
+            }
+        } else if (strncmp(line, "blsta ", 6) == 0) {
+            char ssid[33];
+            if (sscanf(line+6, "%32s", ssid) == 1) {
+                sta_blacklist(ssid);
+                printf("STA profile blacklisted.\n");
+            } else {
+                printf("Usage: blsta <ssid>\n");
+            }
         }
-        // Add more commands as needed
     }
-}
-
-// --- SPIFFS Init ---
-void spiffs_init(void) {
-    esp_vfs_spiffs_conf_t conf = {
-      .base_path = "/spiffs",
-      .partition_label = NULL,
-      .max_files = 5,
-      .format_if_mount_failed = true
-    };
-    esp_vfs_spiffs_register(&conf);
 }
 
 void app_main(void)
