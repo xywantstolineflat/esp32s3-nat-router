@@ -19,7 +19,7 @@ A simple NAT router implementation for the ESP32-S3 DevKitC-1. This project aims
 - [x] Customizable STA List (automatically switch if disconnected/blacklisted)
 - [x] Customizable AP SSID and password
 - [x] Configure all settings via Serial Monitor
-- [x] Fully develop the project on GitHub (no use of ESP-IDF, esptool, PlatformIO, Arduino IDE, etc.)
+- [x] All development, builds, and firmware generation are managed via GitHub Actions—no need for local code compilation or third-party IDEs. To install the firmware, a standard ESP32 flashing tool (e.g., ESP32 Flash Download Tool) is required.
 
 ---
 
