@@ -1,40 +1,68 @@
-name: Build ESP32-S3 NAT Router
+name: ESP32 NAT Router CI Build
 
+# 该工作流将在以下事件发生时触发。
+# push：当代码被推送到仓库时。
+# pull_request：当有拉取请求被创建或更新时。
+# workflow_dispatch：允许用户在 GitHub UI 中手动触发此工作流，这对于调试和按需构建非常有用。
 on:
-  workflow_dispatch:
   push:
-    branches: [ "main" ]
   pull_request:
-    branches: [ "main" ]
+  workflow_dispatch:
 
+# 定义一个名为 'build-firmware' 的作业（job）。
+# 该作业将在 'ubuntu-latest' 虚拟环境上运行。
 jobs:
-  build:
+  build-firmware:
     runs-on: ubuntu-latest
     steps:
+      # 步骤1: 检出仓库代码
+      # actions/checkout@v4 是一个官方操作，用于将仓库代码拉取到运行器中。
+      # 'with: submodules: recursive' 至关重要，因为许多嵌入式项目使用 Git 子模块来管理第三方库。
+      # 这确保了所有必要的代码依赖都被正确检出 [span_27](start_span)[span_27](end_span)。
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
-      - name: Install ESP-IDF
+      # 步骤2: 设置 Python 环境
+      # PlatformIO 是一个基于 Python 的工具，因此需要一个 Python 环境来运行它。
+      - name: Set up Python
+        uses: actions/setup-python@v5
+
+      # 步骤3: 安装 PlatformIO Core
+      # 使用 pip 安装最新的 PlatformIO 命令行工具。
+      - name: Install PlatformIO
         run: |
-          mkdir -p ~/esp
-          cd ~/esp
-          git clone --recursive https://github.com/espressif/esp-idf.git -b v5.1.2
-          cd esp-idf
-          ./install.sh all
-          . ./export.sh
+          pip install -U platformio
 
-      - name: Build firmware
+      # 步骤4: 运行 PlatformIO 构建命令
+      # 这是整个工作流的核心。'platformio run' 命令将自动处理所有构建任务。
+      # '-e esp32-s3-devkitc-1' 指定了构建目标，这是基于用户对 'esp32s3' 的要求所做的假设。
+      # 如果您使用的不是此开发板，请根据您项目中的 'platformio.ini' 文件进行调整。
+      # 这一步会自动处理代码编译、分区表生成和 SPIFFS 镜像的创建。
+      - name: Run PlatformIO Build
         run: |
-          cd ~/work/esp32s3-nat-router/esp32s3-nat-router
-          export IDF_PATH=~/esp/esp-idf
-          . ~/esp/esp-idf/export.sh
-          idf.py set-target esp32s3
-          idf.py fullclean
-          idf.py build
+          platformio run -e esp32-s3-devkitc-1
 
-      - name: Upload firmware artifacts
+      # 步骤5: 查找并打包固件构建产物
+      # 编译完成后，PlatformIO 会将所有二进制文件放置在 '.pio/build/board_name/' 目录下。
+      # 此步骤创建了一个新目录 'build_artifacts' 并将所有必要的固件文件复制到其中。
+      # 然后，使用 zip 命令将所有文件压缩成一个方便下载的单一文件。
+      - name: Find and Package Firmware Artifacts
+        run: |
+          mkdir -p build_artifacts
+          # 复制固件和分区二进制文件，这些是烧录到ESP32所必需的 [span_34](start_span)[span_34](end_span)[span_37](start_span)[span_37](end_span)。
+          cp.pio/build/esp32-s3-devkitc-1/firmware.bin build_artifacts/firmware.bin
+          cp.pio/build/esp32-s3-devkitc-1/partition_table.bin build_artifacts/partition_table.bin
+          cp.pio/build/esp32-s3-devkitc-1/spiffs.bin build_artifacts/spiffs.bin
+          zip -r esp32s3-nat-router.zip build_artifacts/
+
+      # 步骤6: 上传固件产物
+      # 'actions/upload-artifact@v4' 是一个官方操作，用于将文件作为工作流运行的产物上传。
+      # 用户可以在 GitHub Actions 的运行页面下载这个 '.zip' 文件。
+      - name: Upload Firmware Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: esp32s3-nat-router-firmware
-          path: esp32s3-nat-router/build/
-          retention-days: 7
+          name: esp32-firmware
+          path: esp32s3-nat-router.zip
+          retention-days: 7 # 设置产物保留时间为7天
