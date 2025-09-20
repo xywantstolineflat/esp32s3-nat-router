@@ -1,41 +1,45 @@
-name: ESP32 NAT Router CI Build
+name: ESP32-S3 NAT Router CI Build
 
 on:
-  push:
-  pull_request:
   workflow_dispatch:
 
 jobs:
-  build-firmware:
+  build:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
 
-      - name: Install PlatformIO
-        run: |
-          pip install -U platformio
+    - name: Install ESP-IDF
+      run: |
+        git clone --recursive https://github.com/espressif/esp-idf.git -b v5.2
+        cd esp-idf
+        ./install.sh esp32s3
+        echo "source $PWD/export.sh" >> $GITHUB_ENV
 
-      - name: Run PlatformIO Build
-        run: |
-          platformio run -e esp32-s3-devkitc-1
+    - name: Build firmware
+      run: |
+        source esp-idf/export.sh
+        idf.py set-target esp32s3
+        idf.py build
 
-      - name: Find and Package Firmware Artifacts
-        run: |
-          mkdir -p build_artifacts
-          cp .pio/build/esp32-s3-devkitc-1/firmware.bin build_artifacts/firmware.bin
-          cp .pio/build/esp32-s3-devkitc-1/partition_table.bin build_artifacts/partition_table.bin
-          cp .pio/build/esp32-s3-devkitc-1/spiffs.bin build_artifacts/spiffs.bin
-          zip -r esp32s3-nat-router.zip build_artifacts/
+    - name: Package firmware
+      run: |
+        mkdir -p build_artifacts
+        cp build/*.bin build_artifacts/
+        zip -r esp32s3-nat-router.zip build_artifacts/
 
-      - name: Upload Firmware Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: esp32-firmware
-          path: esp32s3-nat-router.zip
-          retention-days: 7
+    - name: Upload firmware artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: esp32s3-nat-router
+        path: esp32s3-nat-router.zip
+        retention-days: 7
