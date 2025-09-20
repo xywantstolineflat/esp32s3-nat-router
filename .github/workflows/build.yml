@@ -1,0 +1,40 @@
+name: Build ESP32-S3 NAT Router
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install ESP-IDF
+        run: |
+          mkdir -p ~/esp
+          cd ~/esp
+          git clone --recursive https://github.com/espressif/esp-idf.git -b v5.1.2
+          cd esp-idf
+          ./install.sh all
+          . ./export.sh
+
+      - name: Build firmware
+        run: |
+          cd ~/work/esp32s3-nat-router/esp32s3-nat-router
+          export IDF_PATH=~/esp/esp-idf
+          . ~/esp/esp-idf/export.sh
+          idf.py set-target esp32s3
+          idf.py fullclean
+          idf.py build
+
+      - name: Upload firmware artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: esp32s3-nat-router-firmware
+          path: esp32s3-nat-router/build/
+          retention-days: 7
